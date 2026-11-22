@@ -1,0 +1,308 @@
+<?php
+/**
+ * Fieldtypes Radiobutton
+ *
+ * @package BDP/Includes/Fields/Fieldtypes Radiobutton
+ */
+
+if ( ! class_exists( 'WPBDP_CategoryFormInputWalker' ) ) {
+	require_once WPBDP_PATH . 'includes/helpers/class-category-form-input-walker.php';
+}
+
+/**
+ * Class WPBDP_FieldTypes_RadioButton
+ */
+class WPBDP_FieldTypes_RadioButton extends WPBDP_Form_Field_Type {
+
+	/**
+	 * Meta radio inputs rejected during conversion.
+	 *
+	 * @since 6.4.25
+	 *
+	 * @var array<int, bool>
+	 */
+	private $invalid_meta_inputs = array();
+
+	public function __construct() {
+		parent::__construct( _x( 'Radio button', 'form-fields api', 'business-directory-plugin' ) );
+	}
+
+	public function get_id() {
+		return 'radio';
+	}
+
+	/**
+	 * Convert submitted radio field input to a safe stored value.
+	 *
+	 * @since 6.4.25
+	 *
+	 * @param WPBDP_Form_Field $field Field object.
+	 * @param mixed            $input Submitted value.
+	 *
+	 * @return int|string
+	 */
+	public function convert_input( &$field, $input ) {
+		if ( 'meta' === $field->get_association() ) {
+			unset( $this->invalid_meta_inputs[ $field->get_id() ] );
+		}
+
+		if ( is_null( $input ) || '' === $input ) {
+			return '';
+		}
+
+		if ( ! is_scalar( $input ) ) {
+			if ( 'meta' === $field->get_association() ) {
+				$this->invalid_meta_inputs[ $field->get_id() ] = true;
+			}
+
+			return '';
+		}
+
+		$input = (string) $input;
+
+		if ( 'category' === $field->get_association() ) {
+			return absint( $input );
+		}
+
+		if ( 'meta' === $field->get_association() ) {
+			if ( in_array( $input, $this->get_stored_options( $field ), true ) ) {
+				return $input;
+			}
+
+			$this->invalid_meta_inputs[ $field->get_id() ] = true;
+			return '';
+		}
+
+		return sanitize_text_field( $input );
+	}
+
+	public function render_field_inner( &$field, $value, $context, &$extra = null, $field_settings = array() ) {
+		$options = $field->data( 'options' ) ? $field->data( 'options' ) : array();
+
+		if ( $field->get_association() == 'tags' && ! $options ) {
+			$tags    = get_terms(
+				array(
+					'taxonomy'   => WPBDP_TAGS_TAX,
+					'hide_empty' => false,
+					'fields'     => 'names',
+				)
+			);
+			$options = array_combine( $tags, $tags );
+		} elseif ( $field->get_association() == 'category' ) {
+			$html = wp_list_categories(
+				array(
+					'taxonomy'         => WPBDP_CATEGORY_TAX,
+					'orderby'          => wpbdp_get_option( 'categories-order-by' ),
+					'order'            => wpbdp_get_option( 'categories-sort' ),
+					'hide_empty'       => 0,
+					'echo'             => 0,
+					'depth'            => 0,
+					'walker'           => new WPBDP_CategoryFormInputWalker( 'radio', $value, $field ),
+					'show_option_none' => '',
+					'title_li'         => '',
+				)
+			);
+
+			return $html;
+		}
+
+		$html     = '';
+		$i        = 1;
+		$selected = $this->get_field_selected_value( $field );
+
+		foreach ( $options as $option => $label ) {
+			$css_classes   = array();
+			$css_classes[] = 'wpbdp-inner-field-option';
+			$css_classes[] = 'wpbdp-inner-field-option-' . WPBDP_Form_Field_Type::normalize_name( $label );
+
+			// For backwards compat.
+			$css_classes[] = 'wpbdp-inner-radio';
+			$css_classes[] = 'wpbdp-inner-radio-' . $i;
+			$css_classes[] = 'wpbdp-inner-radio-' . WPBDP_Form_Field_Type::normalize_name( $label );
+
+			$checked      = '';
+			$option_value = $field->get_association() === 'meta' ? $label : $option;
+			$field_id     = 'wpbdp-field-' . $field->get_id() . '-' . WPBDP_Form_Field_Type::normalize_name( $label );
+
+			if ( ( false !== $selected && null !== $selected && (string) $selected === (string) $option ) || (string) $value === (string) $option_value ) {
+				$checked = 'checked="checked"';
+			}
+
+			$html .= sprintf(
+				'<div class="%1$s"><label for="%6$s"><input id="%6$s" type="radio" name="%2$s" value="%3$s" %4$s /> %5$s</label></div>',
+				esc_attr( implode( ' ', $css_classes ) ),
+				esc_attr( 'listingfields[' . $field->get_id() . ']' ),
+				esc_attr( $option_value ),
+				$checked,
+				esc_html( $label ),
+				esc_attr( $field_id )
+			);
+
+			++$i;
+		}
+
+		return $html;
+	}
+
+	/**
+	 * Extend the parent method to store the selected value.
+	 * 
+	 * @since 6.4.10
+	 *
+	 * @param WPBDP_Form_Field_Type $field
+	 * @param int|string $post_id
+	 * @param string $value
+	 * 
+	 * @return void
+	 */
+	public function store_field_value( &$field, $post_id, $value ) {
+		if ( $field->get_association() === 'meta' ) {
+			$is_invalid_input = isset( $this->invalid_meta_inputs[ $field->get_id() ] );
+			unset( $this->invalid_meta_inputs[ $field->get_id() ] );
+
+			if ( $is_invalid_input ) {
+				return;
+			}
+
+			if ( '' !== $value && in_array( (string) $value, $this->get_stored_options( $field ), true ) ) {
+				$this->store_field_selected_value( $field, $post_id, $value );
+			} else {
+				delete_post_meta( $post_id, '_wpbdp[fields][' . $field->get_id() . ']_selected' );
+			}
+		}
+
+		parent::store_field_value( $field, $post_id, $value );
+	}
+
+	public function get_supported_associations() {
+		return array( 'category', 'tags', 'meta' );
+	}
+
+	public function render_field_settings( &$field = null, $association = null ) {
+		if ( $association != 'meta' && $association != 'tags' ) {
+			return '';
+		}
+
+		$label = _x( 'Field Options (for select lists, radio buttons and checkboxes).', 'form-fields admin', 'business-directory-plugin' ) . '<span class="description">(required)</span>';
+
+		$content  = '<span class="description">One option per line</span><br />';
+		$content .= '<textarea name="field[x_options]" cols="50" rows="2">';
+
+		if ( $field && ( $field->data( 'options' ) || isset( $_POST['field']['x_options'] ) ) ) {
+			if ( $field->data( 'options' ) ) {
+				$options = $field->data( 'options' );
+			} else {
+				$options = $this->get_posted_options();
+			}
+
+			$content .= implode( "\n", $options );
+		}
+		$content .= '</textarea>';
+
+		return self::render_admin_settings( array( array( $label, $content ) ) );
+	}
+
+	/**
+	 * @return void|WP_Error
+	 */
+	public function process_field_settings( &$field ) {
+		if ( ! array_key_exists( 'x_options', $_POST['field'] ) ) {
+			return;
+		}
+
+		$options = $this->get_posted_options();
+
+		if ( ! $options && $field->get_association() != 'tags' ) {
+			return new WP_Error( 'wpbdp-invalid-settings', _x( 'Field list of options is required.', 'form-fields admin', 'business-directory-plugin' ) );
+		}
+
+		if ( 'tags' === $field->get_association() ) {
+			$tags = get_terms(
+				array(
+					'taxonomy'   => WPBDP_TAGS_TAX,
+					'hide_empty' => false,
+					'fields'     => 'names',
+				)
+			);
+
+			foreach ( array_diff( $options, $tags ) as $option ) {
+				wp_insert_term( $option, WPBDP_TAGS_TAX );
+			}
+		}
+
+		$field->set_data( 'options', $options );
+	}
+
+	/**
+	 * @since 5.13
+	 */
+	private function get_posted_options() {
+		$field_data = wpbdp_get_var(
+			array(
+				'param'    => 'field',
+				'sanitize' => 'sanitize_textarea_field',
+			),
+			'post'
+		);
+		if ( empty( $field_data['x_options'] ) ) {
+			return array();
+		}
+
+		return array_map( 'trim', explode( "\n", $field_data['x_options'] ) );
+	}
+
+	public function get_field_value( &$field, $post_id ) {
+		$value = parent::get_field_value( $field, $post_id );
+		return $value && is_array( $value ) ? $value[0] : $value;
+	}
+
+	/**
+	 * Return escaped HTML-safe output for radio field values.
+	 *
+	 * @since 6.4.25
+	 *
+	 * @param WPBDP_Form_Field $field   Field object.
+	 * @param int|string       $post_id Listing ID.
+	 *
+	 * @return string
+	 */
+	public function get_field_html_value( &$field, $post_id ) {
+		if ( 'meta' === $field->get_association() ) {
+			$value = $field->value( $post_id );
+			$value = is_array( $value ) ? implode( ', ', $value ) : $value;
+
+			return esc_html( (string) $value );
+		}
+
+		return parent::get_field_html_value( $field, $post_id );
+	}
+
+	public function get_field_plain_value( &$field, $post_id ) {
+		$value = $field->value( $post_id );
+
+		if ( $field->get_association() == 'category' || $field->get_association() == 'tags' ) {
+			$term = get_term(
+				is_array( $value ) ? $value[0] : $value,
+				$field->get_association() == 'category' ? WPBDP_CATEGORY_TAX : WPBDP_TAGS_TAX
+			);
+			return esc_attr( $term->name );
+		}
+
+		return strval( $value );
+	}
+
+	/**
+	 * Return configured radio options as stored string values.
+	 *
+	 * @since 6.4.25
+	 *
+	 * @param WPBDP_Form_Field $field Field object.
+	 *
+	 * @return string[]
+	 */
+	private function get_stored_options( $field ) {
+		$options = $field->data( 'options' ) ? $field->data( 'options' ) : array();
+
+		return array_map( 'strval', $options );
+	}
+}
